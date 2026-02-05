@@ -1905,7 +1905,7 @@ class FlaskAppWrapper(object):
                 flash('Invalid credentials')
         
         # Render login page with available auth methods
-        return render_template('login.html', 
+        return render_template('landing.html', 
                              sso_enabled=self.sso_enabled, 
                              basic_auth_enabled=self.basic_auth_enabled)
 

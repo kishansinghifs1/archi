@@ -156,7 +156,7 @@ class FlaskAppWrapper:
                     session["admin_user"] = username
                     return redirect(url_for("document_index"))
             flash("Invalid credentials")
-        return render_template("landing.html", sso_enabled=False, basic_auth_enabled=True)
+        return render_template("login.html", sso_enabled=False, basic_auth_enabled=True)
 
     def logout(self):
         session.pop("admin_logged_in", None)
