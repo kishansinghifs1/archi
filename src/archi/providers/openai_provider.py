@@ -18,6 +18,16 @@ logger = get_logger(__name__)
 # Default models available from OpenAI
 DEFAULT_OPENAI_MODELS = [
     ModelInfo(
+        id="gpt-5",
+        name="gpt-5",
+        display_name="GPT-5",
+        context_window=128000,
+        supports_tools=True,
+        supports_streaming=True,
+        supports_vision=True,
+        max_output_tokens=16384,
+    ),
+    ModelInfo(
         id="gpt-4o",
         name="gpt-4o",
         display_name="GPT-4o",

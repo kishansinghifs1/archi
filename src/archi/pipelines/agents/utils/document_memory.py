@@ -1,20 +1,23 @@
-"""Utilities for aggregating documents and notes during agent runs."""
+"""Utilities for aggregating run-level documents, notes, and tool calls."""
 
 from __future__ import annotations
 
-from typing import Iterable, List, Sequence, Tuple
+import json
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from langchain_core.documents import Document
 
 
-class DocumentMemory:
-    """Track documents and textual annotations produced by agent tool calls."""
+class RunMemory:
+    """Track documents, notes, and tool call inputs produced in one run."""
     # TODO for now we return langchain's Document objects. We could think about returning the same Resource classes we use when collecting these (or vice versa) to reduce the amount of dataclasses to worry about.
     # TODO we don't collect retriever scores
 
     def __init__(self) -> None:
         self._document_events: List[Tuple[str, List[Document]]] = []
         self._notes: List[str] = []
+        self._tool_runs: Dict[str, Dict[str, Any]] = {}
+        self._pending_tool_inputs_by_name: Dict[str, List[Any]] = {}
 
     def record(self, stage: str, documents: Iterable[Document]) -> None:
         """Store the documents captured for a specific stage or tool call."""
@@ -41,6 +44,102 @@ class DocumentMemory:
             return
         self._notes.append(message)
 
+    def record_tool_call(self, tool_call_id: str, tool_name: str, tool_input: Any) -> None:
+        """Store/refresh a tool call entry keyed by call id."""
+        if not tool_call_id:
+            return
+        existing = self._tool_runs.get(tool_call_id, {})
+        self._tool_runs[tool_call_id] = {
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name or existing.get("tool_name", "unknown"),
+            "tool_input": tool_input if tool_input not in (None, "") else existing.get("tool_input", {}),
+            "documents": existing.get("documents", []),
+        }
+
+    def record_tool_input(self, tool_name: str, tool_input: Any) -> None:
+        """Record a runtime tool input before the tool_call_id is known."""
+        if not tool_name:
+            return
+
+        # Prefer attaching to an already-seen call id with missing args.
+        # This happens when providers stream tool_call ids first, then execute.
+        for tool_call_id, run in self._tool_runs.items():
+            if run.get("tool_name") != tool_name:
+                continue
+            existing_input = run.get("tool_input", {})
+            if existing_input in (None, "", {}, []):
+                self._tool_runs[tool_call_id] = {
+                    **run,
+                    "tool_input": tool_input,
+                }
+                return
+
+        queue = self._pending_tool_inputs_by_name.setdefault(tool_name, [])
+        queue.append(tool_input)
+
+    def resolve_tool_input(self, tool_call_id: str, tool_name: str, tool_args: Any) -> Any:
+        """Resolve empty tool args from pending runtime inputs and bind to call id."""
+        if tool_args not in (None, "", {}, []):
+            return tool_args
+        if not tool_call_id or not tool_name:
+            return tool_args
+        queue = self._pending_tool_inputs_by_name.get(tool_name) or []
+        if not queue:
+            return tool_args
+        resolved = queue.pop(0)
+        self.record_tool_call(tool_call_id, tool_name, resolved)
+        return resolved
+
+    def record_tool_calls_from_message(self, message: Any) -> None:
+        """Extract tool calls from an LLM message and persist inputs by id."""
+        tool_calls = getattr(message, "tool_calls", None) or []
+        raw_args_by_id: Dict[str, Any] = {}
+
+        additional = getattr(message, "additional_kwargs", {}) or {}
+        raw_tool_calls = additional.get("tool_calls") or []
+        for raw_call in raw_tool_calls:
+            if not isinstance(raw_call, dict):
+                continue
+            raw_id = raw_call.get("id")
+            function_obj = raw_call.get("function") or {}
+            raw_arguments = function_obj.get("arguments")
+            parsed = self._parse_tool_arguments(raw_arguments)
+            if raw_id and parsed is not None:
+                raw_args_by_id[raw_id] = parsed
+
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                continue
+            tool_call_id = call.get("id", "")
+            if not tool_call_id:
+                continue
+            tool_args = call.get("args", {})
+            if tool_args in (None, "", {}, []):
+                tool_args = raw_args_by_id.get(tool_call_id, tool_args)
+            tool_name = call.get("name", "unknown")
+            tool_args = self.resolve_tool_input(tool_call_id, tool_name, tool_args)
+            self.record_tool_call(tool_call_id, tool_name, tool_args)
+
+    def record_tool_documents(self, tool_call_id: str, documents: Iterable[Document]) -> None:
+        """Attach retrieved documents to a previously seen tool call."""
+        if not tool_call_id:
+            return
+        docs_list = [doc for doc in documents if doc]
+        if not docs_list:
+            return
+        current = self._tool_runs.get(tool_call_id)
+        if not current:
+            current = {
+                "tool_call_id": tool_call_id,
+                "tool_name": "unknown",
+                "tool_input": {},
+                "documents": [],
+            }
+        current_docs = current.get("documents", [])
+        current_docs.extend(docs_list)
+        current["documents"] = current_docs
+        self._tool_runs[tool_call_id] = current
+
     @property
     def notes(self) -> Sequence[str]:
         return tuple(self._notes)
@@ -48,6 +147,10 @@ class DocumentMemory:
     @property
     def events(self) -> Sequence[Tuple[str, List[Document]]]:
         return tuple(self._document_events)
+
+    @property
+    def tool_runs(self) -> Sequence[Dict[str, Any]]:
+        return tuple(self._tool_runs.values())
 
     def unique_documents(self) -> List[Document]:
         """Return documents with simple deduplication by source metadata."""
@@ -69,6 +172,30 @@ class DocumentMemory:
             steps.append(f"{stage}: {len(docs)} document(s)")
         return steps
 
+    def tool_inputs_by_id(self) -> Dict[str, Dict[str, Any]]:
+        """Return a stable mapping of tool call ids to serialized tool input."""
+        payload: Dict[str, Dict[str, Any]] = {}
+        for tool_call_id, run in self._tool_runs.items():
+            payload[tool_call_id] = {
+                "tool_call_id": tool_call_id,
+                "tool_name": run.get("tool_name", "unknown"),
+                "tool_input": run.get("tool_input", {}),
+            }
+        return payload
+
+    @staticmethod
+    def _parse_tool_arguments(raw_arguments: Any) -> Optional[Any]:
+        if isinstance(raw_arguments, dict):
+            return raw_arguments
+        if not isinstance(raw_arguments, str):
+            return None
+        if not raw_arguments.strip():
+            return None
+        try:
+            return json.loads(raw_arguments)
+        except Exception:
+            return {"_raw_arguments": raw_arguments}
+
     @staticmethod
     def _document_key(doc: Document) -> Tuple[str, str, str]:
         metadata = doc.metadata or {}
@@ -77,3 +204,7 @@ class DocumentMemory:
             str(metadata.get("path") or metadata.get("file_path") or ""),
             doc.page_content[:200] if doc.page_content else "",
         )
+
+
+# Backward-compatible alias while callers migrate.
+DocumentMemory = RunMemory

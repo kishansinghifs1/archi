@@ -1,4 +1,5 @@
 from typing import Any, Callable, Dict, List, Optional, Sequence, Iterator, AsyncIterator, Set, Tuple
+import json
 import re
 import time
 import uuid
@@ -17,7 +18,7 @@ from src.archi.pipelines.agents.utils.history_utils import infer_speaker
 from src.archi.providers import get_model
 from src.archi.providers.base import ProviderType
 from src.archi.utils.output_dataclass import PipelineOutput
-from src.archi.pipelines.agents.utils.document_memory import DocumentMemory
+from src.archi.pipelines.agents.utils.document_memory import RunMemory
 from src.archi.pipelines.agents.utils.mcp_utils import AsyncLoopThread
 from src.archi.pipelines.agents.tools import initialize_mcp_client
 from src.utils.logging import get_logger
@@ -51,7 +52,7 @@ class BaseReActAgent:
         self.selected_tool_names: List[str] = []
         if agent_spec is not None:
             self.selected_tool_names = list(getattr(agent_spec, "tools", []) or [])
-        self._active_memory: Optional[DocumentMemory] = None
+        self._active_memory: Optional[RunMemory] = None
         self._static_tools: Optional[List[Callable]] = None
         self._mcp_tools: Optional[List[Callable]] = None
         self._active_tools: List[Callable] = []
@@ -74,18 +75,18 @@ class BaseReActAgent:
         if self.agent_prompt is None:
             self.agent_prompt = self.prompts.get("agent_prompt")
 
-    def create_document_memory(self) -> DocumentMemory:
-        """Instantiate a fresh document memory for an agent run."""
-        return DocumentMemory()
+    def create_document_memory(self) -> RunMemory:
+        """Instantiate a fresh run memory for an agent run."""
+        return RunMemory()
 
-    def start_run_memory(self) -> DocumentMemory:
+    def start_run_memory(self) -> RunMemory:
         """Create and store the active memory for the current run."""
         memory = self.create_document_memory()
         self._active_memory = memory
         return memory
 
     @property
-    def active_memory(self) -> Optional[DocumentMemory]:
+    def active_memory(self) -> Optional[RunMemory]:
         """Return the memory currently associated with the run, if any."""
         return self._active_memory
 
@@ -93,7 +94,7 @@ class BaseReActAgent:
         self,
         *,
         answer: str,
-        memory: Optional[DocumentMemory] = None,
+        memory: Optional[RunMemory] = None,
         messages: Optional[Sequence[BaseMessage]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         final: bool = True,
@@ -110,11 +111,14 @@ class BaseReActAgent:
                 resolved_messages = list(messages) if final else [messages[-1]]
             else:
                 resolved_messages = [messages]
+        resolved_metadata = dict(metadata or {})
+        if memory:
+            resolved_metadata.setdefault("tool_inputs_by_id", memory.tool_inputs_by_id())
         return PipelineOutput(
             answer=answer,
             source_documents=documents,
             messages=resolved_messages,
-            metadata=metadata or {},
+            metadata=resolved_metadata,
             final=final,
         )
 
@@ -275,14 +279,34 @@ class BaseReActAgent:
             if "chunk" not in msg_class:
                 all_messages.extend(messages)
 
-            # Detect tool call start (AIMessage with tool_calls)
+            # Detect tool call start.
+            # Emit once a stable tool-call id appears; chunked providers may stream
+            # args later (or never surface them in chunks), but the id is enough to
+            # establish tool activity in the UI.
             if hasattr(message, "tool_calls") and message.tool_calls:
-                logger.debug("Received stream event type=%s: %s", type(event).__name__, str(event)[:1000])
+                logger.debug("Received stream event type=%s", type(message).__name__)
+                logger.debug(message)
+                memory = self.active_memory
+                if memory:
+                    memory.record_tool_calls_from_message(message)
                 new_tool_call = False
                 for tc in message.tool_calls:
                     tc_id = tc.get("id", "")
-                    if tc_id and tc_id not in emitted_tool_starts:
-                        emitted_tool_starts.add(tc_id)
+                    tc_name = tc.get("name", "")
+                    tc_args = tc.get("args", {})
+                    if (not tc_id) and (not tc_name) and tc_args in (None, "", {}, []):
+                        continue
+                    if tc_id:
+                        call_key = f"id:{tc_id}"
+                    else:
+                        tc_name = tc_name or "unknown"
+                        try:
+                            tc_args_key = json.dumps(tc_args, sort_keys=True, default=str)
+                        except Exception:
+                            tc_args_key = str(tc_args)
+                        call_key = f"anon:{tc_name}:{tc_args_key}"
+                    if call_key not in emitted_tool_starts:
+                        emitted_tool_starts.add(call_key)
                         new_tool_call = True
                 if new_tool_call:
                     # End thinking phase if active before tool execution
@@ -308,7 +332,10 @@ class BaseReActAgent:
                         answer="",
                         memory=self.active_memory,
                         messages=[message],
-                        metadata={"event_type": "tool_start"},
+                        metadata={
+                            "event_type": "tool_start",
+                            "tool_inputs_by_id": self.active_memory.tool_inputs_by_id() if self.active_memory else {},
+                        },
                         final=False,
                     )
 
@@ -478,13 +505,32 @@ class BaseReActAgent:
             if "chunk" not in msg_class:
                 all_messages.extend(messages)
 
-            # Detect tool call start
+            # Detect tool call start.
+            # Emit once a stable tool-call id appears; chunked providers may stream
+            # args later (or never surface them in chunks), but the id is enough to
+            # establish tool activity in the UI.
             if hasattr(message, "tool_calls") and message.tool_calls:
+                memory = self.active_memory
+                if memory:
+                    memory.record_tool_calls_from_message(message)
                 new_tool_call = False
                 for tc in message.tool_calls:
                     tc_id = tc.get("id", "")
-                    if tc_id and tc_id not in emitted_tool_starts:
-                        emitted_tool_starts.add(tc_id)
+                    tc_name = tc.get("name", "")
+                    tc_args = tc.get("args", {})
+                    if (not tc_id) and (not tc_name) and tc_args in (None, "", {}, []):
+                        continue
+                    if tc_id:
+                        call_key = f"id:{tc_id}"
+                    else:
+                        tc_name = tc_name or "unknown"
+                        try:
+                            tc_args_key = json.dumps(tc_args, sort_keys=True, default=str)
+                        except Exception:
+                            tc_args_key = str(tc_args)
+                        call_key = f"anon:{tc_name}:{tc_args_key}"
+                    if call_key not in emitted_tool_starts:
+                        emitted_tool_starts.add(call_key)
                         new_tool_call = True
                 if new_tool_call:
                     # End thinking phase if active before tool execution
@@ -508,8 +554,12 @@ class BaseReActAgent:
                     
                     yield self.finalize_output(
                         answer="",
+                        memory=self.active_memory,
                         messages=[message],
-                        metadata={"event_type": "tool_start"},
+                        metadata={
+                            "event_type": "tool_start",
+                            "tool_inputs_by_id": self.active_memory.tool_inputs_by_id() if self.active_memory else {},
+                        },
                         final=False,
                     )
 
@@ -645,8 +695,16 @@ class BaseReActAgent:
         providers_config = {}
         if isinstance(self.config, dict):
             services_cfg = self.config.get("services", {}) if isinstance(self.config.get("services", {}), dict) else {}
-            chat_cfg = services_cfg.get("chat_app", {}) if isinstance(services_cfg, dict) else {}
-            providers_config = chat_cfg.get("providers", {}) if isinstance(chat_cfg, dict) else {}
+            benchmark_cfg = services_cfg.get("benchmarking", {}) if isinstance(services_cfg, dict) else {}
+            has_benchmark_runtime = (
+                isinstance(benchmark_cfg, dict)
+                and benchmark_cfg.get("agent_md_file")
+                and benchmark_cfg.get("provider")
+                and benchmark_cfg.get("model")
+            )
+            if not has_benchmark_runtime:
+                chat_cfg = services_cfg.get("chat_app", {}) if isinstance(services_cfg, dict) else {}
+                providers_config = chat_cfg.get("providers", {}) if isinstance(chat_cfg, dict) else {}
 
         if self.default_provider and not self.default_model:
             raise ValueError("default_model is required when default_provider is set for agent pipelines.")
@@ -915,6 +973,16 @@ class BaseReActAgent:
             # fallback to explicit record + note
             memory.record(stage, docs)
             memory.note(f"{stage} returned {len(list(docs))} document(s).")
+
+    def _store_tool_input(self, tool_name: str, tool_input: Any) -> None:
+        """Store runtime tool input before call-id keyed events are available."""
+        memory = self.active_memory
+        if not memory:
+            return
+        try:
+            memory.record_tool_input(tool_name, tool_input)
+        except Exception:
+            pass
 
     def _prepare_inputs(self, history: Any, **kwargs) -> Dict[str, Any]:
         """Create list of messages using LangChain's formatting."""
