@@ -1,5 +1,4 @@
 from typing import Any, Callable, Dict, List, Optional, Sequence, Iterator, AsyncIterator, Set, Tuple
-import json
 import re
 import time
 import uuid
@@ -19,7 +18,7 @@ from src.archi.pipelines.agents.utils.history_utils import infer_speaker
 from src.archi.providers import get_model
 from src.archi.providers.base import ProviderType
 from src.archi.utils.output_dataclass import PipelineOutput
-from src.archi.pipelines.agents.utils.document_memory import RunMemory
+from src.archi.pipelines.agents.utils.run_memory import RunMemory
 from src.archi.pipelines.agents.utils.mcp_utils import AsyncLoopThread
 from src.archi.pipelines.agents.tools import initialize_mcp_client
 from src.utils.logging import get_logger
@@ -77,13 +76,13 @@ class BaseReActAgent:
         if self.agent_prompt is None:
             self.agent_prompt = self.prompts.get("agent_prompt")
 
-    def create_document_memory(self) -> RunMemory:
+    def create_run_memory(self) -> RunMemory:
         """Instantiate a fresh run memory for an agent run."""
         return RunMemory()
 
     def start_run_memory(self) -> RunMemory:
         """Create and store the active memory for the current run."""
-        memory = self.create_document_memory()
+        memory = self.create_run_memory()
         self._active_memory = memory
         return memory
 
@@ -113,14 +112,11 @@ class BaseReActAgent:
                 resolved_messages = list(messages) if final else [messages[-1]]
             else:
                 resolved_messages = [messages]
-        resolved_metadata = dict(metadata or {})
-        if memory:
-            resolved_metadata.setdefault("tool_inputs_by_id", memory.tool_inputs_by_id())
         return PipelineOutput(
             answer=answer,
             source_documents=documents,
             messages=resolved_messages,
-            metadata=resolved_metadata,
+            metadata=metadata or {},
             final=final,
         )
 
@@ -190,8 +186,7 @@ class BaseReActAgent:
             msg_type = str(getattr(msg, "type", "")).lower()
             if msg_type not in {"ai", "assistant"} and "ai" not in type(msg).__name__.lower():
                 continue
-            response_metadata = getattr(msg, "response_metadata", None)
-            usage = self._extract_usage_from_metadata(response_metadata)
+            usage = self._extract_usage_from_message(msg)
             if usage:
                 total_prompt += usage.get("prompt_tokens", 0)
                 total_completion += usage.get("completion_tokens", 0)
@@ -205,6 +200,23 @@ class BaseReActAgent:
             "completion_tokens": total_completion,
             "total_tokens": total_prompt + total_completion,
         }
+
+    def _extract_usage_from_message(self, message: BaseMessage) -> Optional[Dict[str, int]]:
+        """Extract normalized usage from a single message or chunk."""
+        usage_metadata = getattr(message, "usage_metadata", None)
+        if isinstance(usage_metadata, dict):
+            prompt_tokens = usage_metadata.get("input_tokens", 0)
+            completion_tokens = usage_metadata.get("output_tokens", 0)
+            total_tokens = usage_metadata.get("total_tokens", prompt_tokens + completion_tokens)
+            if prompt_tokens or completion_tokens or total_tokens:
+                return {
+                    "prompt_tokens": int(prompt_tokens or 0),
+                    "completion_tokens": int(completion_tokens or 0),
+                    "total_tokens": int(total_tokens or 0),
+                }
+
+        response_metadata = getattr(message, "response_metadata", None)
+        return self._extract_usage_from_metadata(response_metadata)
 
     def _extract_model_from_messages(self, messages: List[BaseMessage]) -> Optional[str]:
         """Extract model name from the last AI message with response_metadata."""
@@ -269,6 +281,7 @@ class BaseReActAgent:
         recursion_limit = self._recursion_limit()
 
         all_messages: List[BaseMessage] = []  # Accumulated full messages
+        usage_messages: List[BaseMessage] = []  # Includes chunks with usage metadata
         latest_messages: List[BaseMessage] = []
         accumulated_content = ""  # Accumulated raw content from streaming
         emitted_tool_starts: Set[str] = set()
@@ -280,57 +293,62 @@ class BaseReActAgent:
         last_visible_content = ""  # Last visible content emitted (without thinking)
         last_response_metadata: Optional[Dict[str, Any]] = None
         
-        for event in self.agent.stream(agent_inputs, stream_mode="messages"):
+        try:
+            for event in self.agent.stream(
+                agent_inputs,
+                stream_mode="messages",
+                config={"recursion_limit": recursion_limit},
+            ):
 
-            messages = self._extract_messages(event)
-            if not messages:
-                continue
+                messages = self._extract_messages(event)
+                if not messages:
+                    continue
 
-            message = messages[-1]
-            msg_type = str(getattr(message, "type", "")).lower()
-            msg_class = type(message).__name__.lower()
+                latest_messages = list(messages)
+                message = messages[-1]
+                msg_type = str(getattr(message, "type", "")).lower()
+                msg_class = type(message).__name__.lower()
 
-            response_metadata = getattr(message, "response_metadata", None)
-            if response_metadata:
-                last_response_metadata = response_metadata
-            
-            # Track all non-chunk messages
-            if "chunk" not in msg_class:
-                all_messages.extend(messages)
+                if msg_type in {"ai", "assistant"} or "ai" in msg_class:
+                    usage_messages.append(message)
 
-            # Detect tool call start.
-            # Emit once a stable tool-call id appears; chunked providers may stream
-            # args later (or never surface them in chunks), but the id is enough to
-            # establish tool activity in the UI.
-            if hasattr(message, "tool_calls") and message.tool_calls:
-                logger.debug("Received stream event type=%s", type(message).__name__)
-                logger.debug(message)
-                memory = self.active_memory
-                if memory:
-                    memory.record_tool_calls_from_message(message)
-                new_tool_call = False
-                for tc in message.tool_calls:
-                    tc_id = tc.get("id", "")
-                    tc_name = tc.get("name", "")
-                    tc_args = tc.get("args", {})
-                    if (not tc_id) and (not tc_name) and tc_args in (None, "", {}, []):
-                        continue
-                    if tc_id:
-                        call_key = f"id:{tc_id}"
-                    else:
-                        tc_name = tc_name or "unknown"
-                        try:
-                            tc_args_key = json.dumps(tc_args, sort_keys=True, default=str)
-                        except Exception:
-                            tc_args_key = str(tc_args)
-                        call_key = f"anon:{tc_name}:{tc_args_key}"
-                    if call_key not in emitted_tool_starts:
-                        emitted_tool_starts.add(call_key)
-                        new_tool_call = True
-                if new_tool_call:
-                    # End thinking phase if active before tool execution
-                    if thinking_step_id is not None:
-                        duration_ms = int((time.time() - thinking_start_time) * 1000) if thinking_start_time else 0
+                response_metadata = getattr(message, "response_metadata", None)
+                if response_metadata:
+                    last_response_metadata = response_metadata
+                
+                # Track all non-chunk messages
+                if "chunk" not in msg_class:
+                    all_messages.extend(messages)
+
+                # Detect tool call start (AIMessage with tool_calls)
+                if hasattr(message, "tool_calls") and message.tool_calls:
+                    logger.debug("Received stream event type=%s: %s", type(event).__name__, str(event)[:1000])
+                    new_tool_call = False
+                    for tc in message.tool_calls:
+                        tc_id = tc.get("id", "")
+                        if tc_id and tc_id not in emitted_tool_starts:
+                            emitted_tool_starts.add(tc_id)
+                            new_tool_call = True
+                    if new_tool_call:
+                        # End thinking phase if active before tool execution
+                        if thinking_step_id is not None:
+                            duration_ms = int((time.time() - thinking_start_time) * 1000) if thinking_start_time else 0
+                            yield self.finalize_output(
+                                answer="",
+                                memory=self.active_memory,
+                                messages=[],
+                                metadata={
+                                    "event_type": "thinking_end",
+                                    "step_id": thinking_step_id,
+                                    "duration_ms": duration_ms,
+                                    "thinking_content": accumulated_thinking,
+                                },
+                                final=False,
+                            )
+                            thinking_step_id = None
+                            thinking_start_time = None
+                            accumulated_thinking = ""
+                        
                         yield self.finalize_output(
                             answer="",
                             memory=self.active_memory,
@@ -348,8 +366,7 @@ class BaseReActAgent:
                         memory=self.active_memory,
                         messages=[message],
                         metadata={
-                            "event_type": "tool_start",
-                            "tool_inputs_by_id": self.active_memory.tool_inputs_by_id() if self.active_memory else {},
+                            "event_type": "tool_output",
                         },
                         final=False,
                     )
@@ -473,7 +490,7 @@ class BaseReActAgent:
             final_answer, _ = self._parse_thinking_content(accumulated_content)
         
         # Extract usage and model info for final event
-        usage = self._extract_usage_from_messages(all_messages)
+        usage = self._extract_usage_from_messages(usage_messages or all_messages)
         model = self._extract_model_from_messages(all_messages)
         if usage is None:
             usage = self._extract_usage_from_metadata(last_response_metadata)
@@ -509,6 +526,7 @@ class BaseReActAgent:
         recursion_limit = self._recursion_limit()
 
         all_messages: List[BaseMessage] = []
+        usage_messages: List[BaseMessage] = []
         latest_messages: List[BaseMessage] = []
         accumulated_content = ""
         emitted_tool_starts: Set[str] = set()
@@ -520,54 +538,60 @@ class BaseReActAgent:
         last_visible_content = ""  # Last visible content emitted (without thinking)
         last_response_metadata: Optional[Dict[str, Any]] = None
         
-        async for event in self.agent.astream(agent_inputs, stream_mode="messages"):
-            messages = self._extract_messages(event)
-            if not messages:
-                continue
+        try:
+            async for event in self.agent.astream(
+                agent_inputs,
+                stream_mode="messages",
+                config={"recursion_limit": recursion_limit},
+            ):
+                messages = self._extract_messages(event)
+                if not messages:
+                    continue
 
-            message = messages[-1]
-            msg_type = str(getattr(message, "type", "")).lower()
-            msg_class = type(message).__name__.lower()
-            
-            response_metadata = getattr(message, "response_metadata", None)
-            if response_metadata:
-                last_response_metadata = response_metadata
-            
-            # Track all non-chunk messages
-            if "chunk" not in msg_class:
-                all_messages.extend(messages)
+                latest_messages = list(messages)
+                message = messages[-1]
+                msg_type = str(getattr(message, "type", "")).lower()
+                msg_class = type(message).__name__.lower()
 
-            # Detect tool call start.
-            # Emit once a stable tool-call id appears; chunked providers may stream
-            # args later (or never surface them in chunks), but the id is enough to
-            # establish tool activity in the UI.
-            if hasattr(message, "tool_calls") and message.tool_calls:
-                memory = self.active_memory
-                if memory:
-                    memory.record_tool_calls_from_message(message)
-                new_tool_call = False
-                for tc in message.tool_calls:
-                    tc_id = tc.get("id", "")
-                    tc_name = tc.get("name", "")
-                    tc_args = tc.get("args", {})
-                    if (not tc_id) and (not tc_name) and tc_args in (None, "", {}, []):
-                        continue
-                    if tc_id:
-                        call_key = f"id:{tc_id}"
-                    else:
-                        tc_name = tc_name or "unknown"
-                        try:
-                            tc_args_key = json.dumps(tc_args, sort_keys=True, default=str)
-                        except Exception:
-                            tc_args_key = str(tc_args)
-                        call_key = f"anon:{tc_name}:{tc_args_key}"
-                    if call_key not in emitted_tool_starts:
-                        emitted_tool_starts.add(call_key)
-                        new_tool_call = True
-                if new_tool_call:
-                    # End thinking phase if active before tool execution
-                    if thinking_step_id is not None:
-                        duration_ms = int((time.time() - thinking_start_time) * 1000) if thinking_start_time else 0
+                if msg_type in {"ai", "assistant"} or "ai" in msg_class:
+                    usage_messages.append(message)
+                
+                response_metadata = getattr(message, "response_metadata", None)
+                if response_metadata:
+                    last_response_metadata = response_metadata
+                
+                # Track all non-chunk messages
+                if "chunk" not in msg_class:
+                    all_messages.extend(messages)
+
+                # Detect tool call start
+                if hasattr(message, "tool_calls") and message.tool_calls:
+                    new_tool_call = False
+                    for tc in message.tool_calls:
+                        tc_id = tc.get("id", "")
+                        if tc_id and tc_id not in emitted_tool_starts:
+                            emitted_tool_starts.add(tc_id)
+                            new_tool_call = True
+                    if new_tool_call:
+                        # End thinking phase if active before tool execution
+                        if thinking_step_id is not None:
+                            duration_ms = int((time.time() - thinking_start_time) * 1000) if thinking_start_time else 0
+                            yield self.finalize_output(
+                                answer="",
+                                memory=self.active_memory,
+                                messages=[],
+                                metadata={
+                                    "event_type": "thinking_end",
+                                    "step_id": thinking_step_id,
+                                    "duration_ms": duration_ms,
+                                    "thinking_content": accumulated_thinking,
+                                },
+                                final=False,
+                            )
+                            thinking_step_id = None
+                            thinking_start_time = None
+                            accumulated_thinking = ""
+                        
                         yield self.finalize_output(
                             answer="",
                             messages=[message],
@@ -580,11 +604,9 @@ class BaseReActAgent:
                 if tool_call_id:
                     yield self.finalize_output(
                         answer="",
-                        memory=self.active_memory,
                         messages=[message],
                         metadata={
-                            "event_type": "tool_start",
-                            "tool_inputs_by_id": self.active_memory.tool_inputs_by_id() if self.active_memory else {},
+                            "event_type": "tool_output",
                         },
                         final=False,
                     )
@@ -704,7 +726,7 @@ class BaseReActAgent:
             final_answer, _ = self._parse_thinking_content(accumulated_content)
         
         # Extract usage and model info for final event
-        usage = self._extract_usage_from_messages(all_messages)
+        usage = self._extract_usage_from_messages(usage_messages or all_messages)
         model = self._extract_model_from_messages(all_messages)
         if usage is None:
             usage = self._extract_usage_from_metadata(last_response_metadata)
@@ -738,16 +760,8 @@ class BaseReActAgent:
         providers_config = {}
         if isinstance(self.config, dict):
             services_cfg = self.config.get("services", {}) if isinstance(self.config.get("services", {}), dict) else {}
-            benchmark_cfg = services_cfg.get("benchmarking", {}) if isinstance(services_cfg, dict) else {}
-            has_benchmark_runtime = (
-                isinstance(benchmark_cfg, dict)
-                and benchmark_cfg.get("agent_md_file")
-                and benchmark_cfg.get("provider")
-                and benchmark_cfg.get("model")
-            )
-            if not has_benchmark_runtime:
-                chat_cfg = services_cfg.get("chat_app", {}) if isinstance(services_cfg, dict) else {}
-                providers_config = chat_cfg.get("providers", {}) if isinstance(chat_cfg, dict) else {}
+            chat_cfg = services_cfg.get("chat_app", {}) if isinstance(services_cfg, dict) else {}
+            providers_config = chat_cfg.get("providers", {}) if isinstance(chat_cfg, dict) else {}
 
         if self.default_provider and not self.default_model:
             raise ValueError("default_model is required when default_provider is set for agent pipelines.")
@@ -1017,16 +1031,6 @@ class BaseReActAgent:
             memory.record(stage, docs)
             memory.note(f"{stage} returned {len(list(docs))} document(s).")
 
-    def _store_tool_input(self, tool_name: str, tool_input: Any) -> None:
-        """Store runtime tool input before call-id keyed events are available."""
-        memory = self.active_memory
-        if not memory:
-            return
-        try:
-            memory.record_tool_input(tool_name, tool_input)
-        except Exception:
-            pass
-
     def _prepare_inputs(self, history: Any, **kwargs) -> Dict[str, Any]:
         """Create list of messages using LangChain's formatting."""
         history = history or []
@@ -1079,10 +1083,19 @@ class BaseReActAgent:
             return list(payload)
         if isinstance(payload, tuple) and payload and isinstance(payload[0], message_types):
             return [payload[0]]
+        if isinstance(payload, tuple) and len(payload) > 1 and isinstance(payload[1], message_types):
+            return [payload[1]]
+        if (
+            isinstance(payload, tuple)
+            and len(payload) > 1
+            and isinstance(payload[1], list)
+            and all(isinstance(msg, message_types) for msg in payload[1])
+        ):
+            return list(payload[1])
         def _messages_from_container(container: Any) -> List[BaseMessage]:
             if isinstance(container, dict):
                 messages = container.get("messages")
-                if isinstance(messages, list) and all(isinstance(msg, BaseMessage) for msg in messages):
+                if isinstance(messages, list) and all(isinstance(msg, message_types) for msg in messages):
                     return messages
             return []
 

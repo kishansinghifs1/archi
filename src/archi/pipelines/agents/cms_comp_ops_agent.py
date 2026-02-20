@@ -154,7 +154,7 @@ class CMSCompOpsAgent(BaseReActAgent):
             self.catalog_service,
             description=description,
             store_docs=self._store_documents,
-            store_tool_input=self._store_tool_input,
+            store_tool_input=getattr(self, "_store_tool_input", None),
         )
 
     def _build_metadata_search_tool(self) -> Callable:
@@ -163,7 +163,7 @@ class CMSCompOpsAgent(BaseReActAgent):
             self.catalog_service,
             description=description,
             store_docs=self._store_documents,
-            store_tool_input=self._store_tool_input,
+            store_tool_input=getattr(self, "_store_tool_input", None),
         )
 
     def _build_metadata_schema_tool(self) -> Callable:
@@ -178,7 +178,7 @@ class CMSCompOpsAgent(BaseReActAgent):
         return create_document_fetch_tool(
             self.catalog_service,
             description=description,
-            store_tool_input=self._store_tool_input,
+            store_tool_input=getattr(self, "_store_tool_input", None),
         )
 
     def _build_vector_tool_placeholder(self) -> List[Callable]:
@@ -244,6 +244,6 @@ class CMSCompOpsAgent(BaseReActAgent):
                 name="search_vectorstore_hybrid",
                 description=hybrid_description,
                 store_docs=self._store_documents,
-                store_tool_input=self._store_tool_input,
+                store_tool_input=getattr(self, "_store_tool_input", None),
             )
         )

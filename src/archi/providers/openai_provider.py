@@ -118,12 +118,25 @@ class OpenAIProvider(BaseProvider):
     
     def get_chat_model(self, model_name: str, **kwargs) -> ChatOpenAI:
         """Get an OpenAI chat model instance."""
+        config_stream_options = self.config.extra_kwargs.get("stream_options")
+        request_stream_options = kwargs.get("stream_options")
+
+        # Request usage in streamed responses so downstream token accounting/UI can rely on it.
+        merged_stream_options = {"include_usage": True}
+        if isinstance(config_stream_options, dict):
+            merged_stream_options.update(config_stream_options)
+        if isinstance(request_stream_options, dict):
+            merged_stream_options.update(request_stream_options)
+
         model_kwargs = {
             "model": model_name,
             "streaming": True,
             **self.config.extra_kwargs,
             **kwargs,
         }
+
+        if isinstance(model_kwargs.get("stream_options"), dict) or "stream_options" not in model_kwargs:
+            model_kwargs["stream_options"] = merged_stream_options
         
         if self._api_key:
             model_kwargs["api_key"] = self._api_key
