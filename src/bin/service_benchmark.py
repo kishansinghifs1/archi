@@ -576,10 +576,11 @@ class Benchmarker:
     def wait_for_ingestion_completion(self):
         timeout_seconds = int(os.environ.get("BENCH_INGEST_WAIT_TIMEOUT", "3600"))
         poll_interval_seconds = int(os.environ.get("BENCH_INGEST_POLL_INTERVAL", "5"))
+        dm_port = self.config.get("services", {}).get("data_manager", {}).get("external_port", 7871)
         status_urls = [
-            "http://data-manager:7871/api/ingestion/status",
-            "http://localhost:7871/api/ingestion/status",
-            "http://host.containers.internal:7871/api/ingestion/status",
+            f"http://data-manager:{dm_port}/api/ingestion/status",
+            f"http://localhost:{dm_port}/api/ingestion/status",
+            f"http://host.containers.internal:{dm_port}/api/ingestion/status",
         ]
         start_time = time.monotonic()
         attempt = 0
