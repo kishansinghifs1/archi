@@ -29,7 +29,7 @@ class RemoteCatalogClient:
         hostname: Optional[str] = None,
         port: int = 7871,
         external_port: Optional[int] = None,
-        timeout: float = 10.0,
+        timeout: float = 30.0,
         api_token: Optional[str] = None,
     ):
         host_mode_flag = self._resolve_host_mode(host_mode)
