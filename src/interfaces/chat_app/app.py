@@ -439,8 +439,6 @@ class ChatWrapper:
         if not top_sources:
             return _output
 
-        visible_sources = top_sources[:5]
-        hidden_sources = top_sources[5:]
         _output += '''
         <div style="
             margin-top: 1.5em;
@@ -476,14 +474,10 @@ class ChatWrapper:
                 </div>
             '''
 
-        for entry in visible_sources:
+        _output += f'<details style="margin-top: 0.4em;"><summary style="cursor: pointer; color: #66b3ff;">Show all sources ({len(top_sources)})</summary>'
+        for entry in top_sources:
             _output += _entry_html(entry)
-
-        if hidden_sources:
-            _output += f'<details style="margin-top: 0.4em;"><summary style="cursor: pointer; color: #66b3ff;">Show all sources ({len(top_sources)})</summary>'
-            for entry in hidden_sources:
-                _output += _entry_html(entry)
-            _output += '</details>'
+        _output += '</details>'
 
         _output += '</div>'
         return _output
@@ -494,18 +488,10 @@ class ChatWrapper:
         if not top_sources:
             return ""
 
-        visible_sources = top_sources[:5]
-        hidden_sources = top_sources[5:]
-
-        _output = "\n\n---\n**Sources:**\n"
-        for entry in visible_sources:
+        _output = f"\n\n---\n**Sources:**\n\n<details><summary>Show all sources ({len(top_sources)})</summary>\n\n"
+        for entry in top_sources:
             _output += ChatWrapper._format_source_entry(entry)
-
-        if hidden_sources:
-            _output += f"\n<details><summary>Show all sources ({len(top_sources)})</summary>\n\n"
-            for entry in hidden_sources:
-                _output += ChatWrapper._format_source_entry(entry)
-            _output += "\n</details>\n"
+        _output += "\n</details>\n"
 
         return _output
 
