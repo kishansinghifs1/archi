@@ -448,7 +448,6 @@ class ChatWrapper:
             color: #adb5bd;
             line-height: 1.3;
         ">
-            <div style="margin-bottom: 0.3em; font-weight: 500;">Sources:</div>
         '''
 
         def _entry_html(entry):
@@ -474,7 +473,7 @@ class ChatWrapper:
                 </div>
             '''
 
-        _output += f'<details style="margin-top: 0.4em;"><summary style="cursor: pointer; color: #66b3ff;">Show all sources ({len(top_sources)})</summary>'
+        _output += f'<details style="margin-top: 0.4em;"><summary style="cursor: pointer; color: #66b3ff; font-weight: 700;">Show all sources ({len(top_sources)})</summary>'
         for entry in top_sources:
             _output += _entry_html(entry)
         _output += '</details>'
@@ -488,7 +487,7 @@ class ChatWrapper:
         if not top_sources:
             return ""
 
-        _output = f"\n\n---\n**Sources:**\n\n<details><summary>Show all sources ({len(top_sources)})</summary>\n\n"
+        _output = f"\n\n---\n<details><summary><strong>Show all sources ({len(top_sources)})</strong></summary>\n\n"
         for entry in top_sources:
             _output += ChatWrapper._format_source_entry(entry)
         _output += "\n</details>\n"
