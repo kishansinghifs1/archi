@@ -89,6 +89,41 @@ def _build_provider_config_from_payload(config_payload: Dict[str, Any], provider
         extra_kwargs=extra,
     )
 
+
+def _is_provider_enabled_in_config(
+    config_payload: Dict[str, Any],
+    provider_type: Optional[ProviderType] = None,
+    provider_name: Optional[str] = None,
+) -> tuple[bool, Optional[str]]:
+    """
+    Return whether a provider is explicitly enabled by chat_app config.
+
+    Only explicit `enabled: false` inside `services.chat_app.providers.<provider>`
+    disables request-time overrides. Missing provider blocks remain allowed for
+    backward compatibility.
+
+    Exactly one of `provider_type` or `provider_name` should be provided.
+    Unknown provider names are treated as enabled here; other validation paths
+    handle invalid provider types.
+    """
+    if provider_type is None and provider_name:
+        try:
+            provider_type = ProviderType(str(provider_name).lower())
+        except ValueError:
+            return True, None
+    if provider_type is None:
+        return True, None
+
+    services_cfg = config_payload.get("services", {}) if isinstance(config_payload, dict) else {}
+    chat_cfg = services_cfg.get("chat_app", {}) if isinstance(services_cfg, dict) else {}
+    providers_cfg = chat_cfg.get("providers", {}) if isinstance(chat_cfg, dict) else {}
+    provider_cfg = providers_cfg.get(provider_type.value, {})
+
+    if isinstance(provider_cfg, dict) and provider_cfg.get("enabled") is False:
+        return False, f"Provider '{provider_type.value}' is disabled in services.chat_app.providers.{provider_type.value}.enabled"
+    return True, None
+
+
 def _config_names():
     cfg = get_full_config()
     return [cfg.get("name", "default")]
@@ -227,6 +262,12 @@ class ChatWrapper:
         if not agent_class:
             raise ValueError("services.chat_app.agent_class must be configured.")
         default_provider = chat_cfg.get("default_provider")
+        is_enabled, disabled_reason = _is_provider_enabled_in_config(self.config, provider_name=default_provider)
+        if not is_enabled:
+            raise ValueError(
+                f"services.chat_app.default_provider='{str(default_provider).lower()}' is invalid because it is disabled. "
+                f"{disabled_reason}"
+            )
         default_model = chat_cfg.get("default_model")
         prompt_overrides = chat_cfg.get("prompts", {})
 
@@ -297,6 +338,15 @@ class ChatWrapper:
         agent_class = chat_cfg.get("agent_class") or chat_cfg.get("pipeline")
         if not agent_class:
             raise ValueError("services.chat_app.agent_class must be configured.")
+        is_enabled, disabled_reason = _is_provider_enabled_in_config(
+            config_payload, provider_name=chat_cfg.get("default_provider")
+        )
+        if not is_enabled:
+            default_provider = str(chat_cfg.get("default_provider")).lower()
+            raise ValueError(
+                f"services.chat_app.default_provider='{default_provider}' is invalid because it is disabled. "
+                f"{disabled_reason}"
+            )
 
         model_name = self._extract_model_name(config_payload)
         
@@ -1236,8 +1286,13 @@ class ChatWrapper:
         try:
             from src.archi.providers import get_provider
 
+            provider_type = ProviderType(provider)
+            is_enabled, disabled_reason = _is_provider_enabled_in_config(self.config, provider_type)
+            if not is_enabled:
+                raise ValueError(disabled_reason or f"Provider '{provider}' is disabled by configuration")
+
             # Build provider config from YAML so base_url/mode/default_model are respected
-            cfg = _build_provider_config_from_payload(self.config, ProviderType(provider))
+            cfg = _build_provider_config_from_payload(self.config, provider_type)
             provider_instance = get_provider(provider, config=cfg, use_cache=False) if cfg else get_provider(provider)
             if api_key:
                 provider_instance.set_api_key(api_key)
@@ -1607,6 +1662,10 @@ class ChatWrapper:
                         if hasattr(self.archi.pipeline, 'refresh_agent'):
                             self.archi.pipeline.refresh_agent(force=True)
                         logger.info(f"Overrode pipeline LLM with {provider}/{model}")
+                except ValueError as e:
+                    logger.warning(f"Failed to create provider LLM {provider}/{model}: {e}")
+                    yield {"type": "error", "status": 400, "message": str(e)}
+                    return
                 except Exception as e:
                     logger.warning(f"Failed to create provider LLM {provider}/{model}: {e}")
                     yield {"type": "warning", "message": f"Using default model: {e}"}
