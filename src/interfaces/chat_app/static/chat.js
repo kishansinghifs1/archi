@@ -52,7 +52,7 @@ const CONFIG = {
     TEXT_FEEDBACK: '/api/text_feedback',
   },
   STREAMING: {
-    TIMEOUT: 600000, // 30 minutes
+    TIMEOUT: 600000, // 10 minutes
   },
   TRACE: {
     MAX_TOOL_OUTPUT_PREVIEW: 500,
