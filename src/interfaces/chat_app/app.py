@@ -2440,10 +2440,10 @@ class FlaskAppWrapper(object):
             except Exception as exc:
                 logger.warning(f"Failed to load config {name} for description: {exc}")
             options.append({"name": name, "description": description})
-        timeout_seconds = 1800.0
+        timeout_seconds = 600.0
         try:
             chat_cfg = (self.config.get("services", {}) or {}).get("chat_app", {}) or {}
-            configured_timeout = chat_cfg.get("client_timeout_seconds", 1800)
+            configured_timeout = chat_cfg.get("client_timeout_seconds", 600)
             if isinstance(configured_timeout, bool):
                 raise ValueError("boolean is not allowed")
             parsed_timeout = float(configured_timeout)
@@ -2452,7 +2452,7 @@ class FlaskAppWrapper(object):
             else:
                 raise ValueError("must be positive")
         except Exception as exc:
-            logger.warning("Invalid services.chat_app.client_timeout_seconds; using default 1800s: %s", exc)
+            logger.warning("Invalid services.chat_app.client_timeout_seconds; using default 600s: %s", exc)
 
         return jsonify({
             'options': options,
