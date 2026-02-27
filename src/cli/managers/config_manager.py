@@ -184,7 +184,7 @@ class ConfigurationManager:
             )
 
         timeout_path = "services.chat_app.client_timeout_seconds"
-        timeout_raw = chat_cfg.get("client_timeout_seconds", 1800)
+        timeout_raw = chat_cfg.get("client_timeout_seconds", 600)
         if isinstance(timeout_raw, bool):
             raise ValueError(f"Invalid field: '{timeout_path}' must be a positive number of seconds")
         try:
