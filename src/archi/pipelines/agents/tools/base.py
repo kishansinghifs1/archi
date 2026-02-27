@@ -55,6 +55,7 @@ def check_tool_permission(required_permission: str) -> tuple[bool, Optional[str]
             registry = get_registry()
         except Exception as e:
             logger.warning(f"RBAC registry not available, allowing tool access: {e}")
+            return True, None
         try:
             if registry.has_permission(user_roles, required_permission):
                 logger.debug(f"User with roles {user_roles} granted permission '{required_permission}'")
