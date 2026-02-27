@@ -86,14 +86,14 @@ def require_tool_permission(permission: Optional[str]) -> Callable[[F], F]:
     If permission is denied, returns an error message instead of executing the tool.
     
     Args:
-        permission: The permission string required to use the tool (e.g., 'tools:http_get').
+        permission: The permission required to use the tool (e.g., Permission.Tools.HTTP_GET).
                    If None, no permission check is performed (allow all).
-    
+
     Returns:
         A decorator function that wraps the tool with permission checking.
-    
+
     Example:
-        @require_tool_permission("tools:http_get")
+        @require_tool_permission(Permission.Tools.HTTP_GET)
         def _http_get_tool(url: str) -> str:
             ...
     

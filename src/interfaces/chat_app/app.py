@@ -64,6 +64,7 @@ from src.interfaces.chat_app.utils import collapse_assistant_sequences
 
 # RBAC imports for role-based access control
 from src.utils.rbac import (
+    Permission,
     get_registry,
     get_user_roles,
     has_permission,
@@ -2108,7 +2109,7 @@ class FlaskAppWrapper(object):
         self.add_endpoint('/api/like', 'like', self.require_auth(self.like),  methods=["POST"])
         self.add_endpoint('/api/dislike', 'dislike', self.require_auth(self.dislike),  methods=["POST"])
         # Config modification requires config:modify permission (archi-expert or archi-admins)
-        self.add_endpoint('/api/update_config', 'update_config', self.require_perm('config:modify')(self.update_config), methods=["POST"])
+        self.add_endpoint('/api/update_config', 'update_config', self.require_perm(Permission.Config.MODIFY)(self.update_config), methods=["POST"])
         self.add_endpoint('/api/get_configs', 'get_configs', self.require_auth(self.get_configs), methods=["GET"])
         self.add_endpoint('/api/text_feedback', 'text_feedback', self.require_auth(self.text_feedback), methods=["POST"])
 
@@ -2152,39 +2153,39 @@ class FlaskAppWrapper(object):
         # View data page and list documents - requires documents:view permission
         # Enable/disable documents - requires documents:select permission
         logger.info("Adding data viewer API endpoints")
-        self.add_endpoint('/data', 'data_viewer', self.require_perm('documents:view')(self.data_viewer_page))
-        self.add_endpoint('/api/data/documents', 'list_data_documents', self.require_perm('documents:view')(self.list_data_documents), methods=["GET"])
-        self.add_endpoint('/api/data/documents/<document_hash>/content', 'get_data_document_content', self.require_perm('documents:view')(self.get_data_document_content), methods=["GET"])
-        self.add_endpoint('/api/data/documents/<document_hash>/chunks', 'get_data_document_chunks', self.require_perm('documents:view')(self.get_data_document_chunks), methods=["GET"])
-        self.add_endpoint('/api/data/documents/<document_hash>/enable', 'enable_data_document', self.require_perm('documents:select')(self.enable_data_document), methods=["POST"])
-        self.add_endpoint('/api/data/documents/<document_hash>/disable', 'disable_data_document', self.require_perm('documents:select')(self.disable_data_document), methods=["POST"])
-        self.add_endpoint('/api/data/bulk-enable', 'bulk_enable_documents', self.require_perm('documents:select')(self.bulk_enable_documents), methods=["POST"])
-        self.add_endpoint('/api/data/bulk-disable', 'bulk_disable_documents', self.require_perm('documents:select')(self.bulk_disable_documents), methods=["POST"])
-        self.add_endpoint('/api/data/stats', 'get_data_stats', self.require_perm('documents:view')(self.get_data_stats), methods=["GET"])
+        self.add_endpoint('/data', 'data_viewer', self.require_perm(Permission.Documents.VIEW)(self.data_viewer_page))
+        self.add_endpoint('/api/data/documents', 'list_data_documents', self.require_perm(Permission.Documents.VIEW)(self.list_data_documents), methods=["GET"])
+        self.add_endpoint('/api/data/documents/<document_hash>/content', 'get_data_document_content', self.require_perm(Permission.Documents.VIEW)(self.get_data_document_content), methods=["GET"])
+        self.add_endpoint('/api/data/documents/<document_hash>/chunks', 'get_data_document_chunks', self.require_perm(Permission.Documents.VIEW)(self.get_data_document_chunks), methods=["GET"])
+        self.add_endpoint('/api/data/documents/<document_hash>/enable', 'enable_data_document', self.require_perm(Permission.Documents.SELECT)(self.enable_data_document), methods=["POST"])
+        self.add_endpoint('/api/data/documents/<document_hash>/disable', 'disable_data_document', self.require_perm(Permission.Documents.SELECT)(self.disable_data_document), methods=["POST"])
+        self.add_endpoint('/api/data/bulk-enable', 'bulk_enable_documents', self.require_perm(Permission.Documents.SELECT)(self.bulk_enable_documents), methods=["POST"])
+        self.add_endpoint('/api/data/bulk-disable', 'bulk_disable_documents', self.require_perm(Permission.Documents.SELECT)(self.bulk_disable_documents), methods=["POST"])
+        self.add_endpoint('/api/data/stats', 'get_data_stats', self.require_perm(Permission.Documents.VIEW)(self.get_data_stats), methods=["GET"])
 
         # Data uploader endpoints
         logger.info("Adding data uploader API endpoints")
-        self.add_endpoint('/upload', 'upload_page', self.require_auth(self.upload_page))
-        self.add_endpoint('/api/upload/file', 'upload_file', self.require_auth(self.upload_file), methods=["POST"])
-        self.add_endpoint('/api/upload/url', 'upload_url', self.require_auth(self.upload_url), methods=["POST"])
-        self.add_endpoint('/api/upload/git', 'upload_git', self.require_auth(self.upload_git), methods=["POST", "DELETE"])
-        self.add_endpoint('/api/upload/git/refresh', 'refresh_git', self.require_auth(self.refresh_git), methods=["POST"])
-        self.add_endpoint('/api/upload/jira', 'upload_jira', self.require_auth(self.upload_jira), methods=["POST"])
-        self.add_endpoint('/api/upload/embed', 'trigger_embedding', self.require_auth(self.trigger_embedding), methods=["POST"])
-        self.add_endpoint('/api/upload/status', 'get_embedding_status', self.require_auth(self.get_embedding_status), methods=["GET"])
-        self.add_endpoint('/api/upload/documents', 'list_upload_documents', self.require_perm('documents:view')(self.list_upload_documents), methods=["GET"])
-        self.add_endpoint('/api/upload/documents/grouped', 'list_upload_documents_grouped', self.require_perm('documents:view')(self.list_upload_documents_grouped), methods=["GET"])
-        self.add_endpoint('/api/upload/documents/<document_hash>/retry', 'retry_document', self.require_perm('documents:select')(self.retry_document), methods=["POST"])
-        self.add_endpoint('/api/upload/documents/retry-all-failed', 'retry_all_failed', self.require_perm('documents:select')(self.retry_all_failed), methods=["POST"])
-        self.add_endpoint('/api/sources/git', 'list_git_sources', self.require_perm('sources:view')(self.list_git_sources), methods=["GET"])
-        self.add_endpoint('/api/sources/jira', 'list_jira_sources', self.require_perm('sources:view')(self.list_jira_sources), methods=["GET", "DELETE"])
-        self.add_endpoint('/api/sources/schedules', 'source_schedules', self.require_perm('sources:select')(self.source_schedules_dispatch), methods=["GET", "PUT"])
+        self.add_endpoint('/upload', 'upload_page', self.require_perm(Permission.Upload.PAGE)(self.upload_page))
+        self.add_endpoint('/api/upload/file', 'upload_file', self.require_perm(Permission.Upload.FILE)(self.upload_file), methods=["POST"])
+        self.add_endpoint('/api/upload/url', 'upload_url', self.require_perm(Permission.Upload.URL)(self.upload_url), methods=["POST"])
+        self.add_endpoint('/api/upload/git', 'upload_git', self.require_perm(Permission.Upload.GIT)(self.upload_git), methods=["POST", "DELETE"])
+        self.add_endpoint('/api/upload/git/refresh', 'refresh_git', self.require_perm(Permission.Upload.GIT)(self.refresh_git), methods=["POST"])
+        self.add_endpoint('/api/upload/jira', 'upload_jira', self.require_perm(Permission.Upload.JIRA)(self.upload_jira), methods=["POST"])
+        self.add_endpoint('/api/upload/embed', 'trigger_embedding', self.require_perm(Permission.Upload.EMBED)(self.trigger_embedding), methods=["POST"])
+        self.add_endpoint('/api/upload/status', 'get_embedding_status', self.require_perm(Permission.Upload.EMBED)(self.get_embedding_status), methods=["GET"])
+        self.add_endpoint('/api/upload/documents', 'list_upload_documents', self.require_perm(Permission.Documents.VIEW)(self.list_upload_documents), methods=["GET"])
+        self.add_endpoint('/api/upload/documents/grouped', 'list_upload_documents_grouped', self.require_perm(Permission.Documents.VIEW)(self.list_upload_documents_grouped), methods=["GET"])
+        self.add_endpoint('/api/upload/documents/<document_hash>/retry', 'retry_document', self.require_perm(Permission.Documents.SELECT)(self.retry_document), methods=["POST"])
+        self.add_endpoint('/api/upload/documents/retry-all-failed', 'retry_all_failed', self.require_perm(Permission.Documents.SELECT)(self.retry_all_failed), methods=["POST"])
+        self.add_endpoint('/api/sources/git', 'list_git_sources', self.require_perm(Permission.Sources.VIEW)(self.list_git_sources), methods=["GET"])
+        self.add_endpoint('/api/sources/jira', 'list_jira_sources', self.require_perm(Permission.Sources.VIEW)(self.list_jira_sources), methods=["GET", "DELETE"])
+        self.add_endpoint('/api/sources/schedules', 'source_schedules', self.require_perm(Permission.Sources.SELECT)(self.source_schedules_dispatch), methods=["GET", "PUT"])
 
         # Database viewer endpoints (admin only)
         logger.info("Adding database viewer API endpoints")
-        self.add_endpoint('/admin/database', 'database_viewer_page', self.require_perm('database:admin')(self.database_viewer_page))
-        self.add_endpoint('/api/admin/database/tables', 'list_database_tables', self.require_perm('database:admin')(self.list_database_tables), methods=["GET"])
-        self.add_endpoint('/api/admin/database/query', 'run_database_query', self.require_perm('database:admin')(self.run_database_query), methods=["POST"])
+        self.add_endpoint('/admin/database', 'database_viewer_page', self.require_perm(Permission.Admin.DATABASE)(self.database_viewer_page))
+        self.add_endpoint('/api/admin/database/tables', 'list_database_tables', self.require_perm(Permission.Admin.DATABASE)(self.list_database_tables), methods=["GET"])
+        self.add_endpoint('/api/admin/database/query', 'run_database_query', self.require_perm(Permission.Admin.DATABASE)(self.run_database_query), methods=["POST"])
 
         # add unified auth endpoints
         if self.auth_enabled:

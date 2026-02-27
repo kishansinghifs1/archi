@@ -97,12 +97,12 @@ def require_permission(permission: Union[str, List[str]]) -> Callable:
     
     Usage:
         @app.route('/api/upload')
-        @require_permission('upload:documents')
+        @require_permission(Permission.Upload.DOCUMENTS)
         def upload():
             ...
-        
+
         @app.route('/api/admin/config')
-        @require_permission(['config:view', 'config:modify'])
+        @require_permission([Permission.Config.VIEW, Permission.Config.MODIFY])
         def admin_config():
             ...
     """
@@ -203,7 +203,7 @@ def require_any_permission(permissions: List[str]) -> Callable:
     
     Usage:
         @app.route('/api/settings')
-        @require_any_permission(['config:view', 'config:modify', 'admin:system'])
+        @require_any_permission([Permission.Config.VIEW, Permission.Config.MODIFY, Permission.Admin.SYSTEM])
         def settings():
             ...
     """

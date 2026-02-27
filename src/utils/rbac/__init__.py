@@ -8,14 +8,15 @@ This module provides authentication and authorization functionality including:
 - Audit logging for security events
 
 Usage:
-    from src.utils.rbac import require_permission, has_permission, get_user_roles
+    from src.utils.rbac import require_permission, has_permission, Permission
 
     @app.route('/api/upload')
-    @require_permission('upload:documents')
+    @require_permission(Permission.Upload.DOCUMENTS)
     def upload():
         ...
 """
 
+from src.utils.rbac.permission_enum import Permission
 from src.utils.rbac.registry import (
     RBACRegistry,
     get_registry,
@@ -38,6 +39,8 @@ from src.utils.rbac.jwt_parser import (
 )
 
 __all__ = [
+    # Permission enum
+    'Permission',
     # Registry
     'RBACRegistry',
     'get_registry',

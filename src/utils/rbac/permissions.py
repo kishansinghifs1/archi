@@ -10,6 +10,7 @@ from flask import session
 
 from src.utils.logging import get_logger
 from src.utils.rbac.registry import get_registry
+from src.utils.rbac.permission_enum import Permission
 
 logger = get_logger(__name__)
 
@@ -219,8 +220,8 @@ def is_expert(roles: Optional[List[str]] = None) -> bool:
         return True
     
     # Check for expert-level permissions
-    return (has_permission('config:modify', roles) or 
-            has_permission('upload:documents', roles))
+    return (has_permission(Permission.Config.MODIFY, roles) or
+            has_permission(Permission.Upload.DOCUMENTS, roles))
 
 
 def can_upload_documents(roles: Optional[List[str]] = None) -> bool:
@@ -230,27 +231,27 @@ def can_upload_documents(roles: Optional[List[str]] = None) -> bool:
     Returns:
         True if user can upload documents
     """
-    return has_permission('upload:documents', roles)
+    return has_permission(Permission.Upload.DOCUMENTS, roles)
 
 
 def can_modify_config(roles: Optional[List[str]] = None) -> bool:
     """
     Convenience function to check config modification permission.
-    
+
     Returns:
         True if user can modify configuration
     """
-    return has_permission('config:modify', roles)
+    return has_permission(Permission.Config.MODIFY, roles)
 
 
 def can_view_metrics(roles: Optional[List[str]] = None) -> bool:
     """
     Convenience function to check metrics viewing permission.
-    
+
     Returns:
         True if user can view metrics
     """
-    return has_permission('view:metrics', roles)
+    return has_permission(Permission.Metrics.VIEW, roles)
 
 
 def get_permission_context() -> dict:
@@ -282,14 +283,14 @@ def get_permission_context() -> dict:
     
     return {
         'is_authenticated': True,
-        'can_chat': has_permission('chat:query', roles),
-        'can_view_documents': has_permission('documents:view', roles),
-        'can_select_documents': has_permission('documents:select', roles),
-        'can_upload_documents': has_permission('upload:documents', roles),
-        'can_manage_api_keys': has_permission('api-keys:manage', roles),
-        'can_view_config': has_permission('config:view', roles),
-        'can_modify_config': has_permission('config:modify', roles),
-        'can_view_metrics': has_permission('view:metrics', roles),
+        'can_chat': has_permission(Permission.Chat.QUERY, roles),
+        'can_view_documents': has_permission(Permission.Documents.VIEW, roles),
+        'can_select_documents': has_permission(Permission.Documents.SELECT, roles),
+        'can_upload_documents': has_permission(Permission.Upload.DOCUMENTS, roles),
+        'can_manage_api_keys': has_permission(Permission.ApiKeys.MANAGE, roles),
+        'can_view_config': has_permission(Permission.Config.VIEW, roles),
+        'can_modify_config': has_permission(Permission.Config.MODIFY, roles),
+        'can_view_metrics': has_permission(Permission.Metrics.VIEW, roles),
         'is_admin': is_admin(roles),
         'is_expert': is_expert(roles),
         'user_roles': roles,
