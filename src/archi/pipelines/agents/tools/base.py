@@ -49,8 +49,13 @@ def check_tool_permission(required_permission: str) -> tuple[bool, Optional[str]
         user_roles = session.get('roles', [])
         
         # Check permission using RBAC registry
+       
         try:
+            
             registry = get_registry()
+        except Exception as e:
+            logger.warning(f"RBAC registry not available, allowing tool access: {e}")
+        try:
             if registry.has_permission(user_roles, required_permission):
                 logger.debug(f"User with roles {user_roles} granted permission '{required_permission}'")
                 return True, None
@@ -63,9 +68,8 @@ def check_tool_permission(required_permission: str) -> tuple[bool, Optional[str]
                     "if you believe you should have access."
                 )
         except Exception as e:
-            # If RBAC registry is not configured, log warning and allow access
-            logger.warning(f"RBAC registry not available, allowing tool access: {e}")
-            return True, None
+            logger.warning(f"Error checking permission from registry : {e}")
+            return False, "An unexpected error occurred while checking permissions with registry. Access denied.""
             
     except ImportError as e:
         # Flask not available (e.g., running outside web context)
