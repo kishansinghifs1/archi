@@ -90,14 +90,30 @@ def _build_provider_config_from_payload(config_payload: Dict[str, Any], provider
     )
 
 
-def _is_provider_enabled_in_config(config_payload: Dict[str, Any], provider_type: ProviderType) -> tuple[bool, Optional[str]]:
+def _is_provider_enabled_in_config(
+    config_payload: Dict[str, Any],
+    provider_type: Optional[ProviderType] = None,
+    provider_name: Optional[str] = None,
+) -> tuple[bool, Optional[str]]:
     """
     Return whether a provider is explicitly enabled by chat_app config.
 
     Only explicit `enabled: false` inside `services.chat_app.providers.<provider>`
     disables request-time overrides. Missing provider blocks remain allowed for
     backward compatibility.
+
+    Exactly one of `provider_type` or `provider_name` should be provided.
+    Unknown provider names are treated as enabled here; other validation paths
+    handle invalid provider types.
     """
+    if provider_type is None and provider_name:
+        try:
+            provider_type = ProviderType(str(provider_name).lower())
+        except ValueError:
+            return True, None
+    if provider_type is None:
+        return True, None
+
     services_cfg = config_payload.get("services", {}) if isinstance(config_payload, dict) else {}
     chat_cfg = services_cfg.get("chat_app", {}) if isinstance(services_cfg, dict) else {}
     providers_cfg = chat_cfg.get("providers", {}) if isinstance(chat_cfg, dict) else {}
@@ -107,29 +123,6 @@ def _is_provider_enabled_in_config(config_payload: Dict[str, Any], provider_type
         return False, f"Provider '{provider_type.value}' is disabled in services.chat_app.providers.{provider_type.value}.enabled"
     return True, None
 
-
-def _validate_default_provider_enabled(config_payload: Dict[str, Any]) -> None:
-    """
-    Ensure services.chat_app.default_provider is not explicitly disabled.
-    """
-    services_cfg = config_payload.get("services", {}) if isinstance(config_payload, dict) else {}
-    chat_cfg = services_cfg.get("chat_app", {}) if isinstance(services_cfg, dict) else {}
-    default_provider = chat_cfg.get("default_provider")
-    if not default_provider:
-        return
-
-    try:
-        provider_type = ProviderType(str(default_provider).lower())
-    except ValueError:
-        # Existing provider-type validation paths handle unknown providers.
-        return
-
-    is_enabled, disabled_reason = _is_provider_enabled_in_config(config_payload, provider_type)
-    if not is_enabled:
-        raise ValueError(
-            f"services.chat_app.default_provider='{provider_type.value}' is invalid because it is disabled. "
-            f"{disabled_reason}"
-        )
 
 def _config_names():
     cfg = get_full_config()
@@ -268,8 +261,13 @@ class ChatWrapper:
         agent_class = chat_cfg.get("agent_class") or chat_cfg.get("pipeline")
         if not agent_class:
             raise ValueError("services.chat_app.agent_class must be configured.")
-        _validate_default_provider_enabled(self.config)
         default_provider = chat_cfg.get("default_provider")
+        is_enabled, disabled_reason = _is_provider_enabled_in_config(self.config, provider_name=default_provider)
+        if not is_enabled:
+            raise ValueError(
+                f"services.chat_app.default_provider='{str(default_provider).lower()}' is invalid because it is disabled. "
+                f"{disabled_reason}"
+            )
         default_model = chat_cfg.get("default_model")
         prompt_overrides = chat_cfg.get("prompts", {})
 
@@ -340,7 +338,15 @@ class ChatWrapper:
         agent_class = chat_cfg.get("agent_class") or chat_cfg.get("pipeline")
         if not agent_class:
             raise ValueError("services.chat_app.agent_class must be configured.")
-        _validate_default_provider_enabled(config_payload)
+        is_enabled, disabled_reason = _is_provider_enabled_in_config(
+            config_payload, provider_name=chat_cfg.get("default_provider")
+        )
+        if not is_enabled:
+            default_provider = str(chat_cfg.get("default_provider")).lower()
+            raise ValueError(
+                f"services.chat_app.default_provider='{default_provider}' is invalid because it is disabled. "
+                f"{disabled_reason}"
+            )
 
         model_name = self._extract_model_name(config_payload)
         
