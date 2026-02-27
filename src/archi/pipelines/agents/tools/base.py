@@ -73,8 +73,8 @@ def check_tool_permission(required_permission: str) -> tuple[bool, Optional[str]
         return True, None
     except Exception as e:
         logger.error(f"Unexpected error checking tool permission: {e}")
-        # Fail open for unexpected errors to avoid breaking functionality
-        return True, None
+        # Fail closed for unexpected errors to avoid granting access on error
+        return False, "An unexpected error occurred while checking permissions. Access denied."
 
 
 def require_tool_permission(permission: Optional[str]) -> Callable[[F], F]:
